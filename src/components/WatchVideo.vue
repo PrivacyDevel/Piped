@@ -96,7 +96,8 @@
                     >
                         <font-awesome-icon icon="rss" />
                     </a>
-                    <!-- watch on youtube button -->
+                    <WatchOnYouTubeButton :link="`https://youtu.be/${getVideoId()}`" />
+                    <!-- Share Dialog -->
                     <button class="btn" @click="showShareModal = !showShareModal">
                         <i18n-t class="lt-lg:hidden" keypath="actions.share" tag="strong"></i18n-t>
                         <font-awesome-icon class="mx-1.5 ml-1" icon="fa-share" />
@@ -123,6 +124,8 @@
                         v-if="showShareModal"
                         :video-id="getVideoId()"
                         :current-time="currentTime"
+                        :playlist-id="playlistId"
+                        :playlist-index="index"
                         @close="showShareModal = !showShareModal"
                     />
                 </div>
@@ -212,6 +215,7 @@ import ChaptersBar from "./ChaptersBar.vue";
 import PlaylistAddModal from "./PlaylistAddModal.vue";
 import ShareModal from "./ShareModal.vue";
 import PlaylistVideos from "./PlaylistVideos.vue";
+import WatchOnYouTubeButton from "./WatchOnYouTubeButton.vue";
 
 export default {
     name: "App",
@@ -224,6 +228,7 @@ export default {
         PlaylistAddModal,
         ShareModal,
         PlaylistVideos,
+        WatchOnYouTubeButton,
     },
     data() {
         const smallViewQuery = window.matchMedia("(max-width: 640px)");
@@ -330,6 +335,7 @@ export default {
         this.showComments = !this.getPreferenceBoolean("minimizeComments", false);
         this.showDesc = !this.getPreferenceBoolean("minimizeDescription", false);
         this.showRecs = !this.getPreferenceBoolean("minimizeRecommendations", false);
+        this.showChapters = !this.getPreferenceBoolean("minimizeChapters", false);
         if (this.video.duration) {
             document.title = this.video.title + " - Piped";
             this.$refs.videoPlayer.loadVideo();
@@ -368,7 +374,7 @@ export default {
             return this.fetchJson(this.apiUrl() + "/comments/" + this.getVideoId());
         },
         onChange() {
-            this.setPreference("autoplay", this.selectedAutoPlay);
+            this.setPreference("autoplay", this.selectedAutoPlay, true);
         },
         async getVideoData() {
             await this.fetchVideo()
@@ -434,7 +440,10 @@ export default {
                 this.fetchSponsors().then(data => (this.sponsors = data));
         },
         async getComments() {
-            this.fetchComments().then(data => (this.comments = data));
+            this.fetchComments().then(data => {
+                this.rewriteComments(data.comments);
+                this.comments = data;
+            });
         },
         async fetchSubscribedStatus() {
             if (!this.channelId) return;
@@ -457,6 +466,23 @@ export default {
                 this.subscribed = json.subscribed;
             });
         },
+        rewriteComments(data) {
+            data.forEach(comment => {
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(comment.commentText, "text/html");
+                xmlDoc.querySelectorAll("a").forEach(elem => {
+                    if (!elem.innerText.match(/(?:[\d]{1,2}:)?(?:[\d]{1,2}):(?:[\d]{1,2})/))
+                        elem.outerHTML = elem.getAttribute("href");
+                });
+                comment.commentText = xmlDoc
+                    .querySelector("body")
+                    .innerHTML.replaceAll(/(?:http(?:s)?:\/\/)?(?:www\.)?youtube\.com(\/[/a-zA-Z0-9_?=&-]*)/gm, "$1")
+                    .replaceAll(
+                        /(?:http(?:s)?:\/\/)?(?:www\.)?youtu\.be\/(?:watch\?v=)?([/a-zA-Z0-9_?=&-]*)/gm,
+                        "/watch?v=$1",
+                    );
+            });
+        },
         subscribeHandler() {
             if (this.authenticated) {
                 this.fetchJson(this.authApiUrl() + (this.subscribed ? "/unsubscribe" : "/subscribe"), null, {
@@ -470,7 +496,7 @@ export default {
                     },
                 });
             } else {
-                this.handleLocalSubscriptions(this.channelId);
+                if (!this.handleLocalSubscriptions(this.channelId)) return;
             }
             this.subscribed = !this.subscribed;
         },
@@ -483,7 +509,8 @@ export default {
                 }).then(json => {
                     this.comments.nextpage = json.nextpage;
                     this.loading = false;
-                    json.comments.map(comment => this.comments.comments.push(comment));
+                    this.rewriteComments(json.comments);
+                    this.comments.comments = this.comments.comments.concat(json.comments);
                 });
             }
         },
